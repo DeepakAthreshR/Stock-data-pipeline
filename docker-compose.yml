@@ -1,0 +1,97 @@
+# This docker-compose.yml file defines the services for a new stock data pipeline.
+# It sets up a PostgreSQL database and all the necessary components for an Airflow instance.
+
+services:
+  postgres:
+    # Use the official PostgreSQL image.
+    image: postgres:14
+    container_name: stock-postgres
+    # Define environment variables for the PostgreSQL database.
+    environment:
+      - POSTGRES_USER=stock_user
+      - POSTGRES_PASSWORD=stock_password
+      - POSTGRES_DB=stock_data
+    # Map a different port to avoid conflict with the previous project.
+    ports:
+      - "5434:5432"
+    # Use a named volume to persist the database data.
+    volumes:
+      - stock_postgres_data:/var/lib/postgresql/data
+    # Health check to ensure the service is ready.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  airflow-webserver:
+    # Build the image using the provided Dockerfile.
+    build: .
+    container_name: stock-airflow-webserver
+    # Map a different port for the Airflow UI.
+    ports:
+      - "8082:8080"
+    # The command to run the Airflow webserver.
+    command: webserver
+    # Set environment variables, including the database connection details.
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://stock_user:stock_password@postgres/stock_data
+      - AIRFLOW_VAR_STOCK_API_KEY=${STOCK_API_KEY}
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY}
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+    # Mount the dags and data folders to the container.
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+    # Set the webserver's dependencies.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    # Health check to ensure the webserver is running.
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  airflow-scheduler:
+    build: .
+    container_name: stock-airflow-scheduler
+    # The command to run the Airflow scheduler.
+    command: scheduler
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://stock_user:stock_password@postgres/stock_data
+      - AIRFLOW_VAR_STOCK_API_KEY=${STOCK_API_KEY}
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY}
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  # The service to initialize the database and create an Airflow user.
+  airflow-init:
+    build: .
+    container_name: stock-airflow-init
+    command: bash -c "airflow db migrate && airflow users create --username airflow --password airflow --firstname Airflow --lastname Airflow --role Admin --email airflow@example.com"
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://stock_user:stock_password@postgres/stock_data
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${AIRFLOW_SECRET_KEY}
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+    volumes:
+      - ./dags:/opt/airflow/dags
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  stock_postgres_data:
